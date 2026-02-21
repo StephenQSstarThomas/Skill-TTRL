@@ -1,0 +1,69 @@
+# Skill TTRL Default Configuration
+
+data:
+  train_files: []
+  val_files: []
+  max_prompt_length: 512
+  max_response_length: 3072
+  train_batch_size: 8
+  shuffle: true
+  suffix_prompt: "\nPlease reason step by step, and put your final answer within \\boxed{}."
+
+model:
+  path: "Qwen/Qwen2.5-Math-7B"
+  dtype: "bfloat16"
+  lora_rank: 0
+  lora_alpha: 16
+
+rollout:
+  engine: "vllm"
+  temperature: 0.6
+  top_p: 0.95
+  max_tokens: 3072
+  n_votes_per_prompt: 64
+  n_samples_per_prompt: 32
+  tensor_parallel_size: 1
+
+algorithm:
+  adv_estimator: "grpo"
+  gamma: 1.0
+  lam: 1.0
+  clip_ratio: 0.2
+  clip_ratio_high: 5.0
+  norm_adv_by_std: true
+  use_kl_loss: true
+  kl_coef: 0.001
+  entropy_coeff: 0.001
+  loss_agg_mode: "token-mean"
+
+skill_bank:
+  max_skills: 200
+  retrieval_mode: "embedding"
+  embedding_model: "all-MiniLM-L6-v2"
+  top_k_retrieve: 6
+  enable_evolve: true
+  enable_generate: true
+  enable_retrieve: true
+  eviction_window: 50
+
+merger:
+  model: "gpt-4o"
+  max_tokens: 2048
+  temperature: 0.3
+
+trainer:
+  total_epochs: 80
+  save_freq: 5
+  val_freq: 2
+  log_freq: 1
+  learning_rate: 5e-7
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  warmup_ratio: 0.05
+  ref_update_interval: 10
+  output_dir: "outputs"
+  seed: 42
+  n_gpus: 1
+  gradient_accumulation_steps: 1
+  micro_batch_size: 2
+  mini_batch_size: 1
