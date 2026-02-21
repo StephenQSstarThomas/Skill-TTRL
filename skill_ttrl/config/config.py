@@ -2,10 +2,29 @@
 
 from __future__ import annotations
 
+import os
 import yaml
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Optional
+
+
+def _get_env_api_key() -> Optional[str]:
+    """Get API key from environment variables (supports multiple naming conventions)."""
+    for key in ["OPENAI_API_KEY", "SKILL_TTRL_API_KEY", "LLM_API_KEY"]:
+        val = os.environ.get(key)
+        if val:
+            return val
+    return None
+
+
+def _get_env_api_base() -> Optional[str]:
+    """Get API base URL from environment variables."""
+    for key in ["OPENAI_API_BASE", "OPENAI_BASE_URL", "SKILL_TTRL_API_BASE"]:
+        val = os.environ.get(key)
+        if val:
+            return val
+    return None
 
 
 @dataclass
@@ -72,6 +91,8 @@ class SkillBankConfig:
     enable_generate: bool = True
     enable_retrieve: bool = True
     eviction_window: int = 50  # evict skills not used in last N rounds
+    min_winners_for_extraction: int = 2  # min correct solutions to trigger extraction
+    max_skills_per_problem: int = 3  # max skills extracted per problem
 
 
 @dataclass
@@ -138,10 +159,27 @@ class SkillTTRLConfig:
 
 
 def load_config(path: str | Path) -> SkillTTRLConfig:
-    """Load configuration from a YAML file, falling back to defaults."""
+    """Load configuration from a YAML file, falling back to defaults.
+
+    Environment variables override YAML settings for sensitive values:
+    - OPENAI_API_KEY / SKILL_TTRL_API_KEY / LLM_API_KEY -> merger.api_key
+    - OPENAI_API_BASE / OPENAI_BASE_URL / SKILL_TTRL_API_BASE -> merger.api_base
+    """
     path = Path(path)
     if path.exists():
         with open(path) as f:
             raw = yaml.safe_load(f) or {}
-        return SkillTTRLConfig.from_dict(raw)
-    return SkillTTRLConfig()
+        config = SkillTTRLConfig.from_dict(raw)
+    else:
+        config = SkillTTRLConfig()
+
+    # Apply environment variable overrides for API settings
+    env_api_key = _get_env_api_key()
+    if env_api_key and not config.merger.api_key:
+        config.merger.api_key = env_api_key
+
+    env_api_base = _get_env_api_base()
+    if env_api_base and not config.merger.api_base:
+        config.merger.api_base = env_api_base
+
+    return config

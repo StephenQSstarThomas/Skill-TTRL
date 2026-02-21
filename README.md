@@ -441,6 +441,15 @@ print(f"Reward: {metrics['mean_reward']:.2f}")
 print(f"Skills: {metrics['skill_bank_size']}")
 ```
 
+### Examplar Training (First-Run with 1.5b model && self-curated dataset)
+```bash
+python scripts/train.py \
+    --config configs/qwen_1.5b.yaml \
+    --epochs 5 \
+    --output_dir outputs/first_run \
+    --log_level INFO
+```
+
 ### Full Training (requires GPU)
 
 ```bash

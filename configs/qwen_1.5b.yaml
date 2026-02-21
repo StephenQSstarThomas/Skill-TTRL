@@ -1,0 +1,72 @@
+# Skill TTRL Configuration for Qwen2.5-Math-1.5B
+# Optimized for smaller model with reduced resource requirements
+
+data:
+  train_files: ["data/test_train.json"]                  # Add your training data paths here
+  val_files: []                    # Add your validation data paths here
+  max_prompt_length: 512
+  max_response_length: 2048        # Reduced for 1.5B model
+  train_batch_size: 16             # Can use larger batch for smaller model
+  shuffle: true
+  suffix_prompt: "\nPlease reason step by step, and put your final answer within \\boxed{}."
+
+model:
+  path: "Qwen/Qwen2.5-Math-1.5B"
+  dtype: "float16"                 # float16 works well for 1.5B
+  lora_rank: 0                     # Set to 8/16/32 to enable LoRA fine-tuning
+  lora_alpha: 16
+
+rollout:
+  engine: "vllm"                   # Use "hf" if vLLM not available
+  temperature: 0.7                 # Slightly higher temp for smaller model
+  top_p: 0.95
+  max_tokens: 2048
+  n_votes_per_prompt: 32           # Fewer votes for faster iteration
+  n_samples_per_prompt: 16         # Training subset
+  tensor_parallel_size: 1          # Single GPU sufficient for 1.5B
+
+algorithm:
+  adv_estimator: "grpo"
+  gamma: 1.0
+  lam: 1.0
+  clip_ratio: 0.2
+  clip_ratio_high: 5.0
+  norm_adv_by_std: true
+  use_kl_loss: true
+  kl_coef: 0.001
+  entropy_coeff: 0.001
+  loss_agg_mode: "token-mean"
+
+skill_bank:
+  max_skills: 150                  # Slightly smaller skill bank
+  retrieval_mode: "embedding"      # Use "keyword" for CPU-only
+  embedding_model: "all-MiniLM-L6-v2"
+  top_k_retrieve: 5                # Fewer skills to reduce prompt length
+  enable_evolve: true
+  enable_generate: true
+  enable_retrieve: true
+  eviction_window: 40
+  min_winners_for_extraction: 2    # Min correct solutions to trigger skill extraction
+  max_skills_per_problem: 3        # Max skills extracted per problem
+
+merger:
+  model: "gpt-4o"                  # External LLM for merging (or set to null for heuristic)
+  max_tokens: 1536
+  temperature: 0.3
+
+trainer:
+  total_epochs: 40                 # Fewer epochs for faster experimentation
+  save_freq: 5
+  val_freq: 2
+  log_freq: 1
+  learning_rate: 1e-6              # Slightly higher LR for smaller model
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  warmup_ratio: 0.05
+  ref_update_interval: 8
+  output_dir: "outputs/qwen_1.5b"
+  seed: 42
+  n_gpus: 1
+  gradient_accumulation_steps: 1
+  micro_batch_size: 8              # Larger micro-batch for 1.5B
+  mini_batch_size: 4

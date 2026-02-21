@@ -5,7 +5,41 @@ Training entry point for Skill TTRL.
 Usage:
     python scripts/train.py --config configs/default.yaml
     python scripts/train.py --config configs/default.yaml --data.train_files '["data/train.json"]'
+
+Environment variables:
+    OPENAI_API_KEY: API key for external LLM skill extraction/merging
+    OPENAI_API_BASE: Optional custom API endpoint
 """
+
+# IMPORTANT: Set multiprocessing start method BEFORE any other imports
+# This fixes "Cannot re-initialize CUDA in forked subprocess" error with vLLM
+import os
+
+# Load .env file if it exists (for API keys)
+def _load_dotenv():
+    """Load environment variables from .env file if present."""
+    from pathlib import Path
+    env_file = Path(__file__).resolve().parent.parent / ".env"
+    if env_file.exists():
+        with open(env_file) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, _, value = line.partition("=")
+                    key, value = key.strip(), value.strip()
+                    # Don't override existing env vars
+                    if key and key not in os.environ:
+                        os.environ[key] = value
+
+_load_dotenv()
+
+os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+
+import multiprocessing
+try:
+    multiprocessing.set_start_method('spawn', force=True)
+except RuntimeError:
+    pass  # Already set
 
 import argparse
 import sys
@@ -50,8 +84,19 @@ def main():
     # Setup logging
     setup_logging(level=args.log_level)
 
-    # Load config
+    # Load config (will pick up env vars for API keys)
     config = load_config(args.config)
+
+    # Log API configuration status
+    import logging
+    logger = logging.getLogger(__name__)
+    if config.merger.api_key:
+        logger.info("OpenAI API key configured - LLM skill extraction enabled")
+    else:
+        logger.warning(
+            "No API key found. Set OPENAI_API_KEY env var or create .env file. "
+            "Using heuristic skill extraction only."
+        )
 
     # Apply overrides
     if args.output_dir:

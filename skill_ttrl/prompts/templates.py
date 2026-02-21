@@ -80,8 +80,9 @@ Decide which skill operations to perform (if any), then choose your action."""
 COLD_START_TEMPLATE = """\
 {system_prompt}
 
-The skill bank is currently empty. You are encouraged to generate new skills \
-that could help solve this type of problem.
+The skill bank is currently empty. As you solve this problem, think about what \
+general mathematical strategies or techniques you are using that could be \
+applied to similar problems.
 
 ## Problem
 

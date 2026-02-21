@@ -1,27 +1,30 @@
-# Skill TTRL Default Configuration
+# Skill TTRL Configuration for Qwen2.5-Math-3B (or similar 3B model)
+# Balanced configuration for moderate GPU resources
 
 data:
-  train_files: []
-  val_files: []
+  train_files: []                  # Add your training data paths here
+  val_files: []                    # Add your validation data paths here
   max_prompt_length: 512
-  max_response_length: 3072
-  train_batch_size: 8
+  max_response_length: 2560
+  train_batch_size: 12
   shuffle: true
   suffix_prompt: "\nPlease reason step by step, and put your final answer within \\boxed{}."
 
 model:
-  path: "Qwen/Qwen2.5-Math-7B"
+  # NOTE: Qwen2.5-Math doesn't have an official 3B variant
+  # Options: Use Qwen2.5-3B (general), Phi-3-mini-4k-instruct (3.8B), etc.
+  path: "Qwen/Qwen2.5-3B"          # Or use another 3B model
   dtype: "bfloat16"
   lora_rank: 0
   lora_alpha: 16
 
 rollout:
   engine: "vllm"
-  temperature: 0.6
+  temperature: 0.65
   top_p: 0.95
-  max_tokens: 3072
-  n_votes_per_prompt: 64
-  n_samples_per_prompt: 32
+  max_tokens: 2560
+  n_votes_per_prompt: 48           # Moderate number of votes
+  n_samples_per_prompt: 24
   tensor_parallel_size: 1
 
 algorithm:
@@ -37,35 +40,35 @@ algorithm:
   loss_agg_mode: "token-mean"
 
 skill_bank:
-  max_skills: 200
+  max_skills: 180
   retrieval_mode: "embedding"
   embedding_model: "all-MiniLM-L6-v2"
-  top_k_retrieve: 6
+  top_k_retrieve: 5
   enable_evolve: true
   enable_generate: true
   enable_retrieve: true
-  eviction_window: 50
+  eviction_window: 45
   min_winners_for_extraction: 2
   max_skills_per_problem: 3
 
 merger:
   model: "gpt-4o"
-  max_tokens: 2048
+  max_tokens: 1792
   temperature: 0.3
 
 trainer:
-  total_epochs: 80
+  total_epochs: 60
   save_freq: 5
   val_freq: 2
   log_freq: 1
-  learning_rate: 5e-7
+  learning_rate: 8e-7
   weight_decay: 0.01
   max_grad_norm: 1.0
   warmup_ratio: 0.05
   ref_update_interval: 10
-  output_dir: "outputs"
+  output_dir: "outputs/qwen_3b"
   seed: 42
   n_gpus: 1
-  gradient_accumulation_steps: 1
-  micro_batch_size: 2
-  mini_batch_size: 1
+  gradient_accumulation_steps: 2
+  micro_batch_size: 4
+  mini_batch_size: 2

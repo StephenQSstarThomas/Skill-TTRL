@@ -28,6 +28,7 @@ from skill_ttrl.core.skill_bank import SkillBank, Skill
 from skill_ttrl.core.output_parser import OutputParser
 from skill_ttrl.core.majority_vote import majority_vote
 from skill_ttrl.core.merge_llm import SkillMerger
+from skill_ttrl.core.skill_extractor import SkillExtractor
 from skill_ttrl.core.grpo import (
     compute_grpo_advantage,
     compute_policy_loss,
@@ -49,11 +50,13 @@ def classify_task_type(problem: str) -> str:
     problem_lower = problem.lower()
 
     keywords = {
-        "algebra": ["equation", "solve for", "polynomial", "quadratic", "linear"],
-        "geometry": ["triangle", "circle", "angle", "area", "perimeter", "polygon"],
-        "number_theory": ["prime", "divisor", "modular", "gcd", "lcm", "divisible"],
-        "combinatorics": ["permutation", "combination", "probability", "choose", "arrange"],
-        "calculus": ["integral", "derivative", "limit", "continuous", "differential"],
+        "algebra": ["equation", "solve for", "polynomial", "quadratic", "linear", "inequality", "system", "factor"],
+        "geometry": ["triangle", "circle", "angle", "area", "perimeter", "polygon", "ellipse", "parabola", "conic"],
+        "number_theory": ["prime", "divisor", "modular", "gcd", "lcm", "divisible", "integer"],
+        "combinatorics": ["permutation", "combination", "probability", "choose", "arrange", "drawn", "random", "balls"],
+        "calculus": ["integral", "derivative", "limit", "continuous", "differential", "maximum", "minimum", "extrema", "ln(", "log("],
+        "trigonometry": ["sin", "cos", "tan", "trigonometric", "angle"],
+        "sequences": ["sequence", "series", "a_n", "a_{n", "sum s_n", "recurrence", "geometric", "arithmetic"],
         "logic": ["prove", "if and only if", "contradiction", "induction"],
     }
 
@@ -92,6 +95,15 @@ class SkillTTRLTrainer:
             api_base=config.merger.api_base,
             max_tokens=config.merger.max_tokens,
             temperature=config.merger.temperature,
+        )
+        self.skill_extractor = SkillExtractor(
+            model=config.merger.model,
+            api_key=config.merger.api_key,
+            api_base=config.merger.api_base,
+            max_tokens=config.merger.max_tokens,
+            temperature=config.merger.temperature,
+            min_winners_for_extraction=config.skill_bank.min_winners_for_extraction,
+            max_skills_per_problem=config.skill_bank.max_skills_per_problem,
         )
         self.reward_manager = RewardManager()
         self.prompt_formatter = PromptFormatter(
@@ -264,14 +276,16 @@ class SkillTTRLTrainer:
         1. Format prompts with skill bank context
         2. Generate K samples per prompt
         3. Majority vote for pseudo ground truth
-        4. Merge winning samples' skill operations
-        5. Update skill bank
-        6. Compute GRPO advantages
-        7. Update policy (if model is available)
+        4. Extract skills from winning solutions (heuristic + optional LLM)
+        5. Merge skill operations from model output (if any)
+        6. Update skill bank
+        7. Compute GRPO advantages
+        8. Update policy (if model is available)
         """
         problems = batch["prompts"]
         n_per_prompt = self.config.rollout.n_votes_per_prompt
         n_train = self.config.rollout.n_samples_per_prompt
+        enable_generate = self.config.skill_bank.enable_generate
 
         # Step 1: Format prompts with skill context
         formatted_prompts = []
@@ -307,59 +321,89 @@ class SkillTTRLTrainer:
         agreement_ratios = reward_result["agreement_ratios"]
         parsed_outputs = reward_result["parsed_outputs"]
 
-        # Step 4: External LLM merge for each prompt
+        # Step 4 & 5: Skill extraction + merger for each prompt
         total_new_skills = 0
+        existing_titles = {s.title for s in self.skill_bank.all_skills}
+
         for pid in range(len(problems)):
+            task_type = task_types[pid] if pid < len(task_types) else "general"
+
             # Collect winning samples
-            winners = []
+            winners_parsed = []
+            winners_raw = []
             start_idx = pid * n_per_prompt
             for j in range(n_per_prompt):
                 idx = start_idx + j
                 if rewards[idx] > 0.5:
-                    winners.append(parsed_outputs[idx])
+                    winners_parsed.append(parsed_outputs[idx])
+                    winners_raw.append(flat_responses[idx])
 
-            if not winners:
+            if not winners_parsed:
                 continue
 
-            # Merge skill operations from winners
+            # --- Step 4: Automatic skill extraction from solutions ---
+            # This is the PRIMARY skill discovery mechanism.
+            # Unlike the original approach that relied on models outputting
+            # <skill_ops> tags (which never happened), this extracts skills
+            # from the actual solution content.
+            if enable_generate:
+                extracted_skills = self.skill_extractor.extract_from_solutions(
+                    problem=problems[pid],
+                    winning_solutions=winners_raw,
+                    existing_skill_titles=existing_titles,
+                )
+                for skill_dict in extracted_skills:
+                    self.skill_bank.add_from_dict(
+                        skill_dict,
+                        task_type=task_type,
+                        source="extracted",
+                        round_num=self.current_step,
+                    )
+                    existing_titles.add(skill_dict.get("title", ""))
+                    total_new_skills += 1
+
+            # --- Step 5: Also check model output for <skill_ops> tags ---
+            # Keep backward compatibility: if the model DID output skill ops,
+            # use the merger to process them too.
             try:
-                merged = self.merger.merge(winners)
+                merged = self.merger.merge(winners_parsed)
             except Exception as e:
                 logger.warning(f"Merge failed for prompt {pid}: {e}")
-                # Fallback: use heuristic merge
                 self.merger.use_api = False
-                merged = self.merger.merge(winners)
+                merged = self.merger.merge(winners_parsed)
                 self.merger.use_api = True
 
-            # Step 5: Update skill bank
-            task_type = task_types[pid] if pid < len(task_types) else "general"
+            # Add merged generated skills
+            if enable_generate:
+                for new_skill in merged.new_skills:
+                    self.skill_bank.add_from_dict(
+                        new_skill,
+                        task_type=task_type,
+                        source="generated",
+                        round_num=self.current_step,
+                    )
+                    total_new_skills += 1
 
-            for new_skill in merged.new_skills:
-                self.skill_bank.add_from_dict(
-                    new_skill,
-                    task_type=task_type,
-                    source="generated",
-                    round_num=self.current_step,
-                )
-                total_new_skills += 1
-
-            for base_id, evolved_dict in merged.evolved_skills:
-                evolved = Skill(
-                    skill_id=self.skill_bank._generate_id(),
-                    title=evolved_dict.get("title", f"Evolved from {base_id}"),
-                    content=evolved_dict.get("content", ""),
-                    task_type=task_type,
-                    source="evolved",
-                    created_at_round=self.current_step,
-                    parent_id=base_id,
-                )
-                self.skill_bank.replace(base_id, evolved)
+            # Handle evolved skills
+            if self.config.skill_bank.enable_evolve:
+                for base_id, evolved_dict in merged.evolved_skills:
+                    evolved = Skill(
+                        skill_id=self.skill_bank._generate_id(),
+                        title=evolved_dict.get("title", f"Evolved from {base_id}"),
+                        content=evolved_dict.get("content", ""),
+                        task_type=task_type,
+                        source="evolved",
+                        created_at_round=self.current_step,
+                        parent_id=base_id,
+                    )
+                    self.skill_bank.replace(base_id, evolved)
 
             # Record usage for retrieved skills
-            for sid in merged.useful_retrieval_ids:
-                self.skill_bank.record_usage(
-                    sid, success=True, round_num=self.current_step
-                )
+            if self.config.skill_bank.enable_retrieve:
+                for sid in merged.useful_retrieval_ids:
+                    self.skill_bank.record_usage(
+                        sid, success=True, round_num=self.current_step
+                    )
 
         # Step 6: GRPO advantage computation (on subset for training)
         # Select n_train samples per prompt for actual training
@@ -550,9 +594,27 @@ class SkillTTRLTrainer:
 
             # Collect winners
             winners = [p for p, m in zip(parsed, matches) if m]
+            winner_texts = [r for r, m in zip(responses, matches) if m]
 
             if winners:
-                # Merge skill operations
+                # Extract skills from winning solutions (primary mechanism)
+                if self.config.skill_bank.enable_generate:
+                    existing_titles = {s.title for s in self.skill_bank.all_skills}
+                    extracted = self.skill_extractor.extract_from_solutions(
+                        problem=problem,
+                        winning_solutions=winner_texts,
+                        existing_skill_titles=existing_titles,
+                    )
+                    for skill_dict in extracted:
+                        self.skill_bank.add_from_dict(
+                            skill_dict,
+                            task_type=task_type,
+                            source="extracted",
+                            round_num=pid,
+                        )
+                        total_new_skills += 1
+
+                # Also merge skill operations from model output (if any)
                 merged = self.merger.merge(winners)
 
                 # Update skill bank

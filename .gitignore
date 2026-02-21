@@ -32,7 +32,11 @@ coverage.xml
 outputs/
 refs/
 Overall_plan.md
+PIPELINE_GUIDE.md
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Environment variables (contains secrets)
+.env
