@@ -40,7 +40,7 @@ from skill_ttrl.training.reward import RewardManager
 from skill_ttrl.training.rollout import RolloutEngine
 from skill_ttrl.prompts.formatter import PromptFormatter
 from skill_ttrl.data.dataset import SkillTTRLDataset, collate_fn
-from skill_ttrl.utils.logging import MetricsTracker, setup_logging
+from skill_ttrl.utils.logging import MetricsTracker, setup_logging, StepLogger
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +119,9 @@ class SkillTTRLTrainer:
         # Output directory
         self.output_dir = Path(config.trainer.output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Step logger for detailed training logs
+        self.step_logger = StepLogger(self.output_dir, prefix="step_logs")
 
         # Training state
         self.current_epoch = 0
@@ -328,17 +331,39 @@ class SkillTTRLTrainer:
         for pid in range(len(problems)):
             task_type = task_types[pid] if pid < len(task_types) else "general"
 
+            # Collect all answers and responses for this problem (for logging)
+            start_idx = pid * n_per_prompt
+            end_idx = start_idx + n_per_prompt
+            problem_answers = [parsed_outputs[i].answer for i in range(start_idx, end_idx)]
+            problem_rewards = [rewards[i].item() for i in range(start_idx, end_idx)]
+            problem_responses = flat_responses[start_idx:end_idx]
+
             # Collect winning samples
             winners_parsed = []
             winners_raw = []
-            start_idx = pid * n_per_prompt
             for j in range(n_per_prompt):
                 idx = start_idx + j
                 if rewards[idx] > 0.5:
                     winners_parsed.append(parsed_outputs[idx])
                     winners_raw.append(flat_responses[idx])
 
+            # Track merged skills for this problem
+            problem_merged_skills = []
+
             if not winners_parsed:
+                # Log even when no winners
+                self.step_logger.log_step(
+                    epoch=self.current_epoch,
+                    step=self.current_step,
+                    problem_idx=pid,
+                    problem=problems[pid],
+                    all_answers=problem_answers,
+                    pseudo_gt=majority_answers.get(pid, ""),
+                    agreement_ratio=agreement_ratios.get(pid, 0.0),
+                    rewards=problem_rewards,
+                    merged_skills=[],
+                    raw_responses=problem_responses[:5],
+                )
                 continue
 
             # --- Step 4: Automatic skill extraction from solutions ---
@@ -352,7 +377,7 @@ class SkillTTRLTrainer:
                     winning_solutions=winners_raw,
                     existing_skill_titles=existing_titles,
                 )
-                for skill_dict in extracted_skills:
+                for skill_dict in extracted_skills[:3]:  # Limit to 3 skills
                     self.skill_bank.add_from_dict(
                         skill_dict,
                         task_type=task_type,
@@ -361,6 +386,7 @@ class SkillTTRLTrainer:
                     )
                     existing_titles.add(skill_dict.get("title", ""))
                     total_new_skills += 1
+                    problem_merged_skills.append(skill_dict)
 
             # --- Step 5: Also check model output for <skill_ops> tags ---
             # Keep backward compatibility: if the model DID output skill ops,
@@ -373,9 +399,10 @@ class SkillTTRLTrainer:
                 merged = self.merger.merge(winners_parsed)
                 self.merger.use_api = True
 
-            # Add merged generated skills
-            if enable_generate:
-                for new_skill in merged.new_skills:
+            # Add merged generated skills (limit to 3 total per problem)
+            remaining_slots = 3 - len(problem_merged_skills)
+            if enable_generate and remaining_slots > 0:
+                for new_skill in merged.new_skills[:remaining_slots]:
                     self.skill_bank.add_from_dict(
                         new_skill,
                         task_type=task_type,
@@ -383,6 +410,7 @@ class SkillTTRLTrainer:
                         round_num=self.current_step,
                     )
                     total_new_skills += 1
+                    problem_merged_skills.append(new_skill)
 
             # Handle evolved skills
             if self.config.skill_bank.enable_evolve:
@@ -404,6 +432,20 @@ class SkillTTRLTrainer:
                     self.skill_bank.record_usage(
                         sid, success=True, round_num=self.current_step
                     )
+
+            # Log detailed step information
+            self.step_logger.log_step(
+                epoch=self.current_epoch,
+                step=self.current_step,
+                problem_idx=pid,
+                problem=problems[pid],
+                all_answers=problem_answers,
+                pseudo_gt=majority_answers.get(pid, ""),
+                agreement_ratio=agreement_ratios.get(pid, 0.0),
+                rewards=problem_rewards,
+                merged_skills=problem_merged_skills[:3],  # Ensure max 3 skills
+                raw_responses=problem_responses[:5],
+            )
 
         # Step 6: GRPO advantage computation (on subset for training)
         # Select n_train samples per prompt for actual training

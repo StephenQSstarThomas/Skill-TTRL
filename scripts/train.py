@@ -72,6 +72,10 @@ def parse_args():
         help="Override random seed"
     )
     parser.add_argument(
+        "--train_files", type=str, nargs="+", default=None,
+        help="Override training data files (e.g., --train_files data/custom.json)"
+    )
+    parser.add_argument(
         "--log_level", type=str, default="INFO",
         help="Logging level"
     )
@@ -105,6 +109,8 @@ def main():
         config.trainer.total_epochs = args.epochs
     if args.seed:
         config.trainer.seed = args.seed
+    if args.train_files:
+        config.data.train_files = args.train_files
 
     # Create trainer and run
     trainer = SkillTTRLTrainer(config)
